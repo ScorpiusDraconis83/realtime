@@ -1,10 +1,9 @@
 defmodule Realtime.Tenants.AuthorizationTest do
-  # async: false due to usage of mocks
-  use RealtimeWeb.ConnCase, async: false
+  use RealtimeWeb.ConnCase, async: true
 
   require Phoenix.ChannelTest
 
-  import Mock
+  import ExUnit.CaptureLog
 
   alias Realtime.Api.Message
   alias Realtime.Database
@@ -13,120 +12,26 @@ defmodule Realtime.Tenants.AuthorizationTest do
   alias Realtime.Tenants.Authorization.Policies
   alias Realtime.Tenants.Authorization.Policies.BroadcastPolicies
   alias Realtime.Tenants.Authorization.Policies.PresencePolicies
-  alias RealtimeWeb.Joken.CurrentTime
 
   setup [:rls_context]
 
-  describe "get_authorizations for Plug.Conn" do
-    @tag role: "authenticated",
-         policies: [
-           :authenticated_read_broadcast,
-           :authenticated_read_presence
-         ]
-    test "authenticated user has expected policies", context do
-      {:ok, conn} =
-        Authorization.get_read_authorizations(
-          Phoenix.ConnTest.build_conn(),
-          context.db_conn,
-          context.authorization_context
-        )
-
-      assert %Policies{
-               broadcast: %BroadcastPolicies{read: true, write: nil},
-               presence: %PresencePolicies{read: true, write: nil}
-             } = conn.assigns.policies
-    end
-
-    @tag role: "authenticated",
-         policies: [
-           :authenticated_read_broadcast
-         ]
-    test "authenticated user has expected mixed policies", context do
-      {:ok, conn} =
-        Authorization.get_read_authorizations(
-          Phoenix.ConnTest.build_conn(),
-          context.db_conn,
-          context.authorization_context
-        )
-
-      assert %Policies{
-               broadcast: %BroadcastPolicies{read: true, write: nil},
-               presence: %PresencePolicies{read: false, write: nil}
-             } = conn.assigns.policies
-    end
-
-    @tag role: "authenticated",
-         policies: [
-           :authenticated_read_broadcast,
-           :authenticated_write_broadcast
-         ]
-    test "authenticated user has expected mixed extensions policies", context do
-      {:ok, conn} =
-        Authorization.get_read_authorizations(
-          Phoenix.ConnTest.build_conn(),
-          context.db_conn,
-          context.authorization_context
-        )
-
-      {:ok, conn} =
-        Authorization.get_write_authorizations(
-          conn,
-          context.db_conn,
-          context.authorization_context
-        )
-
-      assert %Policies{
-               broadcast: %BroadcastPolicies{read: true, write: true},
-               presence: %PresencePolicies{read: false, write: false}
-             } = conn.assigns.policies
-    end
-
-    @tag role: "anon",
-         policies: [
-           :authenticated_read_broadcast,
-           :authenticated_write_broadcast,
-           :authenticated_read_presence,
-           :authenticated_write_presence
-         ]
-    test "anon user has no policies", context do
-      {:ok, conn} =
-        Authorization.get_read_authorizations(
-          Phoenix.ConnTest.build_conn(),
-          context.db_conn,
-          context.authorization_context
-        )
-
-      {:ok, conn} =
-        Authorization.get_write_authorizations(
-          conn,
-          context.db_conn,
-          context.authorization_context
-        )
-
-      assert %Policies{
-               broadcast: %BroadcastPolicies{read: false, write: false},
-               presence: %PresencePolicies{read: false, write: false}
-             } = conn.assigns.policies
-    end
-  end
-
-  describe "get_authorizations for Phoenix.Socket" do
+  describe "get_authorizations/3" do
     @tag role: "authenticated",
          policies: [
            :authenticated_read_broadcast_and_presence,
            :authenticated_write_broadcast_and_presence
          ]
     test "authenticated user has expected policies", context do
-      {:ok, socket} =
+      {:ok, policies} =
         Authorization.get_read_authorizations(
-          Phoenix.ChannelTest.socket(RealtimeWeb.UserSocket),
+          %Policies{},
           context.db_conn,
           context.authorization_context
         )
 
-      {:ok, socket} =
+      {:ok, policies} =
         Authorization.get_write_authorizations(
-          socket,
+          policies,
           context.db_conn,
           context.authorization_context
         )
@@ -134,7 +39,7 @@ defmodule Realtime.Tenants.AuthorizationTest do
       assert %Policies{
                broadcast: %BroadcastPolicies{read: true, write: true},
                presence: %PresencePolicies{read: true, write: true}
-             } = socket.assigns.policies
+             } == policies
     end
 
     @tag role: "anon",
@@ -143,16 +48,16 @@ defmodule Realtime.Tenants.AuthorizationTest do
            :authenticated_write_broadcast_and_presence
          ]
     test "anon user has no policies", context do
-      {:ok, socket} =
+      {:ok, policies} =
         Authorization.get_read_authorizations(
-          Phoenix.ChannelTest.socket(RealtimeWeb.UserSocket),
+          %Policies{},
           context.db_conn,
           context.authorization_context
         )
 
-      {:ok, socket} =
+      {:ok, policies} =
         Authorization.get_write_authorizations(
-          socket,
+          policies,
           context.db_conn,
           context.authorization_context
         )
@@ -160,47 +65,7 @@ defmodule Realtime.Tenants.AuthorizationTest do
       assert %Policies{
                broadcast: %BroadcastPolicies{read: false, write: false},
                presence: %PresencePolicies{read: false, write: false}
-             } = socket.assigns.policies
-    end
-  end
-
-  describe "get_write_authorizations for DBConnection" do
-    @tag role: "authenticated",
-         policies: [
-           :authenticated_read_broadcast_and_presence,
-           :authenticated_write_broadcast_and_presence
-         ]
-    test "authenticated user has expected policies", context do
-      {:ok, policies} =
-        Authorization.get_write_authorizations(
-          context.db_conn,
-          context.db_conn,
-          context.authorization_context
-        )
-
-      assert %Policies{
-               broadcast: %BroadcastPolicies{read: nil, write: true},
-               presence: %PresencePolicies{read: nil, write: true}
-             } = policies
-    end
-
-    @tag role: "anon",
-         policies: [
-           :authenticated_read_broadcast_and_presence,
-           :authenticated_write_broadcast_and_presence
-         ]
-    test "anon user has no policies", context do
-      {:ok, policies} =
-        Authorization.get_write_authorizations(
-          context.db_conn,
-          context.db_conn,
-          context.authorization_context
-        )
-
-      assert %Policies{
-               broadcast: %BroadcastPolicies{read: nil, write: false},
-               presence: %PresencePolicies{read: nil, write: false}
-             } = policies
+             } == policies
     end
   end
 
@@ -219,40 +84,25 @@ defmodule Realtime.Tenants.AuthorizationTest do
 
       Process.sleep(100)
 
-      assert {:error, :increase_connection_pool} =
-               Authorization.get_read_authorizations(
-                 Phoenix.ConnTest.build_conn(),
-                 context.db_conn,
-                 context.authorization_context
-               )
+      log =
+        capture_log(fn ->
+          assert {:error, :increase_connection_pool} =
+                   Authorization.get_read_authorizations(
+                     %Policies{},
+                     context.db_conn,
+                     context.authorization_context
+                   )
 
-      assert {:error, :increase_connection_pool} =
-               Authorization.get_write_authorizations(
-                 Phoenix.ConnTest.build_conn(),
-                 context.db_conn,
-                 context.authorization_context
-               )
+          assert {:error, :increase_connection_pool} =
+                   Authorization.get_write_authorizations(
+                     %Policies{},
+                     context.db_conn,
+                     context.authorization_context
+                   )
+        end)
 
-      assert {:error, :increase_connection_pool} =
-               Authorization.get_read_authorizations(
-                 Phoenix.ChannelTest.socket(RealtimeWeb.UserSocket),
-                 context.db_conn,
-                 context.authorization_context
-               )
-
-      assert {:error, :increase_connection_pool} =
-               Authorization.get_write_authorizations(
-                 Phoenix.ChannelTest.socket(RealtimeWeb.UserSocket),
-                 context.db_conn,
-                 context.authorization_context
-               )
-
-      assert {:error, :increase_connection_pool} =
-               Authorization.get_write_authorizations(
-                 context.db_conn,
-                 context.db_conn,
-                 context.authorization_context
-               )
+      external_id = context.tenant.external_id
+      assert log =~ "project=#{external_id} external_id=#{external_id} [error] ErrorExecutingTransaction"
 
       Task.await(task, :timer.minutes(1))
     end
@@ -262,35 +112,35 @@ defmodule Realtime.Tenants.AuthorizationTest do
     test "broken RLS policy sets policies to false and shows error to user", context do
       assert {:error, :rls_policy_error, %Postgrex.Error{}} =
                Authorization.get_read_authorizations(
-                 Phoenix.ConnTest.build_conn(),
+                 %Policies{},
                  context.db_conn,
                  context.authorization_context
                )
 
       assert {:error, :rls_policy_error, %Postgrex.Error{}} =
                Authorization.get_write_authorizations(
-                 Phoenix.ConnTest.build_conn(),
+                 %Policies{},
                  context.db_conn,
                  context.authorization_context
                )
 
       assert {:error, :rls_policy_error, %Postgrex.Error{}} =
                Authorization.get_read_authorizations(
-                 Phoenix.ChannelTest.socket(RealtimeWeb.UserSocket),
+                 %Policies{},
                  context.db_conn,
                  context.authorization_context
                )
 
       assert {:error, :rls_policy_error, %Postgrex.Error{}} =
                Authorization.get_write_authorizations(
-                 Phoenix.ChannelTest.socket(RealtimeWeb.UserSocket),
+                 %Policies{},
                  context.db_conn,
                  context.authorization_context
                )
 
       assert {:error, :rls_policy_error, %Postgrex.Error{}} =
                Authorization.get_write_authorizations(
-                 context.db_conn,
+                 %Policies{},
                  context.db_conn,
                  context.authorization_context
                )
@@ -304,16 +154,16 @@ defmodule Realtime.Tenants.AuthorizationTest do
            :authenticated_write_broadcast_and_presence
          ]
     test "authenticated user has expected policies", context do
-      {:ok, socket} =
+      {:ok, _} =
         Authorization.get_read_authorizations(
-          Phoenix.ChannelTest.socket(RealtimeWeb.UserSocket),
+          %Policies{},
           context.db_conn,
           context.authorization_context
         )
 
       {:ok, _} =
         Authorization.get_write_authorizations(
-          socket,
+          %Policies{},
           context.db_conn,
           context.authorization_context
         )
@@ -331,42 +181,47 @@ defmodule Realtime.Tenants.AuthorizationTest do
          ]
 
     test "sends telemetry event", context do
-      with_mock Realtime.Telemetry, execute: fn _, _, _ -> :ok end do
-        {:ok, conn} =
-          Authorization.get_read_authorizations(
-            Phoenix.ConnTest.build_conn(),
-            context.db_conn,
-            context.authorization_context
-          )
+      on_exit(fn -> :telemetry.detach(__MODULE__) end)
 
-        {:ok, _} =
-          Authorization.get_write_authorizations(
-            conn,
-            context.db_conn,
-            context.authorization_context
-          )
+      events = [
+        [:realtime, :tenants, :write_authorization_check],
+        [:realtime, :tenants, :read_authorization_check]
+      ]
 
-        assert_called(
-          Realtime.Telemetry.execute(
-            [:realtime, :tenants, :read_authorization_check],
-            %{latency: :_},
-            %{tenant_id: context.authorization_context.tenant_id}
-          )
+      :telemetry.attach_many(
+        __MODULE__,
+        events,
+        fn event, measurements, metadata, _config ->
+          send(self(), {:telemetry_event, event, measurements, metadata})
+        end,
+        %{}
+      )
+
+      {:ok, _} =
+        Authorization.get_read_authorizations(
+          %Policies{},
+          context.db_conn,
+          context.authorization_context
         )
 
-        assert_called(
-          Realtime.Telemetry.execute(
-            [:realtime, :tenants, :write_authorization_check],
-            %{latency: :_},
-            %{tenant_id: context.authorization_context.tenant_id}
-          )
+      {:ok, _} =
+        Authorization.get_write_authorizations(
+          %Policies{},
+          context.db_conn,
+          context.authorization_context
         )
-      end
+
+      external_id = context.authorization_context.tenant_id
+
+      assert_receive {:telemetry_event, [:realtime, :tenants, :read_authorization_check], %{latency: _},
+                      %{tenant_id: ^external_id}}
+
+      assert_receive {:telemetry_event, [:realtime, :tenants, :write_authorization_check], %{latency: _},
+                      %{tenant_id: ^external_id}}
     end
   end
 
   def rls_context(context) do
-    start_supervised(CurrentTime.Mock)
     tenant = Containers.checkout_tenant(run_migrations: true)
     {:ok, db_conn} = Database.connect(tenant, "realtime_test", :stop)
     topic = random_string()

@@ -17,22 +17,25 @@ defmodule RealtimeWeb.RealtimeChannel.PresenceHandler do
   alias RealtimeWeb.Presence
   alias RealtimeWeb.RealtimeChannel.Logging
 
-  @spec handle(map(), Phoenix.Socket.t()) :: {:reply, :error | :ok, Phoenix.Socket.t()}
-  def handle(%{"event" => event} = payload, socket) do
+  @spec handle(map(), Socket.t()) :: {:reply, :error | :ok, Socket.t()}
+  def handle(payload, %{assigns: %{private?: false}} = socket), do: handle(payload, nil, socket)
+
+  @spec handle(map(), pid() | nil, Socket.t()) :: {:reply, :error | :ok, Socket.t()}
+  def handle(%{"event" => event} = payload, db_conn, socket) do
     event = String.downcase(event, :ascii)
 
-    case handle_presence_event(event, payload, socket) do
+    case handle_presence_event(event, payload, db_conn, socket) do
       {:ok, socket} -> {:reply, :ok, socket}
       {:error, socket} -> {:reply, :error, socket}
     end
   end
 
-  def handle(_payload, socket), do: {:noreply, socket}
+  def handle(_payload, _db_conn, socket), do: {:noreply, socket}
 
   @doc """
   Sends presence state to connected clients
   """
-  @spec sync(Phoenix.Socket.t()) :: {:noreply, Phoenix.Socket.t()}
+  @spec sync(Socket.t()) :: {:noreply, Socket.t()}
   def sync(%{assigns: %{private?: false}} = socket) do
     %{assigns: %{tenant_topic: topic}} = socket
     socket = count(socket)
@@ -58,20 +61,26 @@ defmodule RealtimeWeb.RealtimeChannel.PresenceHandler do
     {:noreply, socket}
   end
 
-  defp handle_presence_event("track", payload, %{assigns: %{private?: false}} = socket) do
+  defp handle_presence_event("track", payload, _db_conn, %{assigns: %{private?: false}} = socket) do
     track(socket, payload)
   end
 
   defp handle_presence_event(
          "track",
          payload,
-         %{assigns: %{private?: true, policies: %Policies{presence: %PresencePolicies{write: nil}}}} = socket
+         db_conn,
+         %{assigns: %{private?: true, policies: %Policies{presence: %PresencePolicies{write: nil}} = policies}} = socket
        ) do
-    %{assigns: %{db_conn: db_conn, authorization_context: authorization_context}} = socket
+    %{assigns: %{authorization_context: authorization_context}} = socket
 
-    case run_authorization_check(socket, db_conn, authorization_context) do
-      {:ok, socket} ->
-        handle_presence_event("track", payload, socket)
+    case Authorization.get_write_authorizations(policies, db_conn, authorization_context) do
+      {:ok, policies} ->
+        socket = assign(socket, :policies, policies)
+        handle_presence_event("track", payload, db_conn, socket)
+
+      {:error, :rls_policy_error, error} ->
+        log_error("RlsPolicyError", error)
+        {:error, socket}
 
       {:error, error} ->
         log_error("UnableToSetPolicies", error)
@@ -82,6 +91,7 @@ defmodule RealtimeWeb.RealtimeChannel.PresenceHandler do
   defp handle_presence_event(
          "track",
          payload,
+         _db_conn,
          %{assigns: %{private?: true, policies: %Policies{presence: %PresencePolicies{write: true}}}} = socket
        ) do
     track(socket, payload)
@@ -90,17 +100,18 @@ defmodule RealtimeWeb.RealtimeChannel.PresenceHandler do
   defp handle_presence_event(
          "track",
          _,
+         _db_conn,
          %{assigns: %{private?: true, policies: %Policies{presence: %PresencePolicies{write: false}}}} = socket
        ) do
     {:error, socket}
   end
 
-  defp handle_presence_event("untrack", _, socket) do
+  defp handle_presence_event("untrack", _, _, socket) do
     %{assigns: %{presence_key: presence_key, tenant_topic: tenant_topic}} = socket
     {Presence.untrack(self(), tenant_topic, presence_key), socket}
   end
 
-  defp handle_presence_event(event, _, socket) do
+  defp handle_presence_event(event, _, _, socket) do
     log_error("UnknownPresenceEvent", event)
     {:error, socket}
   end
@@ -139,17 +150,5 @@ defmodule RealtimeWeb.RealtimeChannel.PresenceHandler do
     |> Shard.name_for_topic(topic, size)
     |> Shard.dirty_list(topic)
     |> Phoenix.Presence.group()
-  end
-
-  defp run_authorization_check(
-         %Socket{assigns: %{private?: true, policies: %{presence: %PresencePolicies{write: nil}}}} = socket,
-         db_conn,
-         authorization_context
-       ) do
-    Authorization.get_write_authorizations(socket, db_conn, authorization_context)
-  end
-
-  defp run_authorization_check(socket, _db_conn, _authorization_context) do
-    {:ok, socket}
   end
 end
